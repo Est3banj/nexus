@@ -345,9 +345,9 @@ export function EmployeeSearchPage() {
                             alert(`Iniciando venta para IMEI: ${item.imei1}`);
                           }}
                           className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                        >
-                          Vender este equipo
-                        </div>
+                         >
+                           Vender este equipo
+                         </button>
                       </div>
                     </div>
                   )}
