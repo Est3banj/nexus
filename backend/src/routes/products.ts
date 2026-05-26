@@ -39,37 +39,39 @@ export function createProductsRouter() {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Transform: flatten stock_count and strip cost_price for employees
-    const products = data.map((p: any) => ({
-      ...p,
-      variants: p.variants?.map((v: any) => {
-        const stock_count = v.inventory_items?.[0]?.count ?? 0;
-        if (req.user?.role !== 'admin') {
-          const { cost_price_cents, ...rest } = v;
-          return { ...rest, stock_count, inventory_items: undefined };
-        }
-        return { ...v, stock_count, inventory_items: undefined };
-      }) ?? [],
-    }));
+     // Transform: flatten stock_count and strip cost_price for employees
+     const products = data.map((p: any) => ({
+       ...p,
+       main_image_url: p.main_image_url,
+       variants: p.variants?.map((v: any) => {
+         const stock_count = v.inventory_items?.[0]?.count ?? 0;
+         if (req.user?.role !== 'admin') {
+           const { cost_price_cents, ...rest } = v;
+           return { ...rest, stock_count, inventory_items: undefined };
+         }
+         return { ...v, stock_count, inventory_items: undefined };
+       }) ?? [],
+     }));
 
     res.json({ products, total: count, page: pageNum, limit: limitNum });
   });
 
-  // GET /api/products/:id — product detail with variants + stock count
-  router.get('/:id', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
-    const { data: product, error } = await req.supabase!
-      .from('products')
-      .select(`
-        *,
-        brand:brand_id(id, name, slug),
-        variants:product_variants(
-          id, storage_gb, color, sale_price_cents, cost_price_cents,
-          is_active, created_at,
-          inventory_items(count)
-        )
-      `)
-      .eq('id', req.params.id)
-      .single();
+   // GET /api/products/:id — product detail with variants + stock count
+   router.get('/:id', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
+     const { data: product, error } = await req.supabase!
+       .from('products')
+       .select(`
+         *,
+         brand:brand_id(id, name, slug),
+         variants:product_variants(
+           id, storage_gb, color, sale_price_cents, cost_price_cents,
+           is_active, created_at,
+           inventory_items(count)
+         ),
+         main_image_url
+       `)
+       .eq('id', req.params.id)
+       .single();
 
     if (error) return res.status(404).json({ error: 'Product not found' });
 
@@ -203,18 +205,18 @@ export function createProductsRouter() {
         finalBrandId = brand.id;
       }
 
-      // Paso 2: Crear producto
-      const { data: product, error: productError } = await req.supabase!
-        .from('products')
-        .insert({
-          brand_id: finalBrandId,
-          model_name: model_name.trim(),
-          description,
-          model_code: model_code?.trim() || null,
-          main_image_url: main_image_url || null,
-        })
-        .select('id, model_name, brand:brand_id(id, name)')
-        .single();
+       // Paso 2: Crear producto
+       const { data: product, error: productError } = await req.supabase!
+         .from('products')
+         .insert({
+           brand_id: finalBrandId,
+           model_name: model_name.trim(),
+           description,
+           model_code: model_code?.trim() || null,
+           main_image_url: main_image_url || null,
+         })
+         .select('id, model_name, model_code, description, main_image_url, is_active, created_at, brand:brand_id(id, name, slug)')
+         .single();
 
       if (productError) throw productError;
 
