@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, Navigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 interface DashboardStats {
@@ -44,20 +44,28 @@ function movementLabel(type: string) {
 
 export function DashboardPage() {
   const { session, profile } = useAuth();
+  const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [lowStock, setLowStock] = useState<LowStockItem[]>([]);
   const [recentMovements, setRecentMovements] = useState<Movement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Si es empleado, lo mandamos directo a la búsqueda
-  if (profile?.role === 'employee') {
-    return <Navigate to="/employee" replace />;
-  }
+  // Si es empleado, lo mandamos directo a la búsqueda (después del render inicial)
+  useEffect(() => {
+    if (profile?.role === 'employee') {
+      navigate('/employee', { replace: true });
+    }
+  }, [profile?.role, navigate]);
 
   useEffect(() => {
+    // Solo admins pueden acceder al dashboard completo
+    if (profile?.role !== 'admin') {
+      return;
+    }
+    
     fetchDashboard();
-  }, []);
+  }, [profile?.role]);
 
   async function fetchDashboard() {
     try {
