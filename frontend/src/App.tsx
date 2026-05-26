@@ -10,6 +10,7 @@ import { AddArticlePage } from './pages/admin/AddArticlePage';
 import { StockIntakePage } from './pages/admin/StockIntakePage';
 import { StockMovementsPage } from './pages/admin/StockMovementsPage';
 import { SearchImeiPage } from './pages/SearchImeiPage'; 
+import { EmployeeSearchPage } from './pages/employee/EmployeeSearchPage';
 
 function App() {
   return (
@@ -62,12 +63,12 @@ function App() {
             </ProtectedRoute>
           } />
 
-          {/* Employee route sin sidebar admin */}
-          <Route path="/employee" element={
-            <ProtectedRoute>
-              <SearchImeiPage />
-            </ProtectedRoute>
-          } />
+           {/* Employee route sin sidebar admin */}
+           <Route path="/employee" element={
+             <ProtectedRoute>
+               <EmployeeSearchPage />
+             </ProtectedRoute>
+           } />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
