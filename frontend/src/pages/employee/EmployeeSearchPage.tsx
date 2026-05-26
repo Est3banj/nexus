@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import { Link } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface SearchResult {
   id: string;
@@ -253,7 +252,7 @@ export function EmployeeSearchPage() {
               </p>
               {total > 0 && (
                 <span className="text-xs text-gray-400">
-                  {results.filter(r => r.variant?.status === 'in_stock').length} disponibles
+                  {results.filter(r => r.status === 'in_stock').length} disponibles
                 </span>
               )}
             </div>
@@ -294,11 +293,7 @@ export function EmployeeSearchPage() {
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor(item.status)}`}>
                             {statusLabel(item.status)}
                           </span>
-                          {item.variant?.status === 'in_stock' && item.variant?.inventory_count === 1 && (
-                            <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                              ¡ÚLTIMA UNIDAD!
-                            </span>
-                          )}
+
                         </div>
                       </div>
                       
@@ -327,40 +322,40 @@ export function EmployeeSearchPage() {
                   </div>
                   
                   {/* Acciones rápidas para empleados */}
-                  {item.variant?.status === 'in_stock' && (
-                    <div className="mt-4 pt-4 border-t border-gray-100">
-                      <div className="flex justify-between items-center">
-                        <button
-                          onClick={() => {
-                            // Aquí iría la lógica para "marcar como mostrado" o "preparar para venta"
-                            alert(`Mostrando dispositivo IMEI: ${item.imei1}`);
-                          }}
-                          className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 mr-2"
-                        >
-                          Mostrar al cliente
-                        </button>
-                        <button
-                          onClick={() => {
-                            // Aquí iría la lógica para iniciar venta
-                            alert(`Iniciando venta para IMEI: ${item.imei1}`);
-                          }}
-                          className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                   {item.status === 'in_stock' && (
+                     <div className="mt-4 pt-4 border-t border-gray-100">
+                       <div className="flex justify-between items-center">
+                         <button
+                           onClick={() => {
+                             // Aquí iría la lógica para "marcar como mostrado" o "preparar para venta"
+                             alert(`Mostrando dispositivo IMEI: ${item.imei1}`);
+                           }}
+                           className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 mr-2"
+                         >
+                           Mostrar al cliente
+                         </button>
+                         <button
+                           onClick={() => {
+                             // Aquí iría la lógica para iniciar venta
+                             alert(`Iniciando venta para IMEI: ${item.imei1}`);
+                           }}
+                           className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
                          >
                            Vender este equipo
                          </button>
-                      </div>
-                    </div>
-                  )}
+                       </div>
+                     </div>
+                   )}
                   
-                  {/* Historial rápido (versión simplificada) */}
-                  {item.variant?.status !== 'in_stock' && (
-                    <div className="mt-3 pt-3 border-t border-gray-100">
-                      <div className="text-sm text-gray-500">
-                        Estado actual: {statusLabel(item.status)}
-                        {item.notes && ` — ${item.notes}`}
-                      </div>
-                    </div>
-                  )}
+                   {/* Historial rápido (versión simplificada) */}
+                   {item.status !== 'in_stock' && (
+                     <div className="mt-3 pt-3 border-t border-gray-100">
+                       <div className="text-sm text-gray-500">
+                         Estado actual: {statusLabel(item.status)}
+                         {item.notes && ` — ${item.notes}`}
+                       </div>
+                     </div>
+                   )}
                 </div>
               ))}
             </div>

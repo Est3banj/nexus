@@ -9,7 +9,6 @@ import { ProductDetailPage } from './pages/admin/ProductDetailPage';
 import { AddArticlePage } from './pages/admin/AddArticlePage';
 import { StockIntakePage } from './pages/admin/StockIntakePage';
 import { StockMovementsPage } from './pages/admin/StockMovementsPage';
-import { SearchImeiPage } from './pages/SearchImeiPage'; 
 import { EmployeeSearchPage } from './pages/employee/EmployeeSearchPage';
 
 function App() {
