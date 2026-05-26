@@ -290,45 +290,118 @@ export function createVariantsRouter() {
     res.json({ inventory: updated });
   });
 
-  // GET /api/inventory/search — search IMEIs by partial match
-  router.get('/inventory/search', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
-    const { q } = req.query;
+   // GET /api/inventory/search — search IMEIs by partial match
+   router.get('/inventory/search', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
+     const { q } = req.query;
 
-    if (!q || (q as string).trim().length === 0) {
-      return res.status(400).json({ error: 'Parámetro de búsqueda requerido (?q=)' });
-    }
+     if (!q || (q as string).trim().length === 0) {
+       return res.status(400).json({ error: 'Parámetro de búsqueda requerido (?q=)' });
+     }
 
-    const searchTerm = (q as string).trim();
+     const searchTerm = (q as string).trim();
 
-    const { data, error } = await req.supabase!
-      .from('inventory_items')
-      .select(`
-        id, imei1, imei2, status, notes, created_at, updated_at,
-        variant:variant_id(
-          storage_gb, color, sale_price_cents, cost_price_cents,
-          product:product_id(model_name, brand:brand_id(name))
-        )
-      `)
-      .or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`)
-      .order('created_at', { ascending: false })
-      .limit(20);
+     const { data, error } = await req.supabase!
+       .from('inventory_items')
+       .select(`
+         id, imei1, imei2, status, notes, created_at, updated_at,
+         variant:variant_id(
+           storage_gb, color, sale_price_cents, cost_price_cents,
+           product:product_id(model_name, brand:brand_id(name), image_url)
+         )
+       `)
+       .or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`)
+       .order('created_at', { ascending: false })
+       .limit(20);
 
-    if (error) return res.status(500).json({ error: error.message });
+     if (error) return res.status(500).json({ error: error.message });
 
-    // Stripear cost_price si no es admin
-    let results = data;
-    if (req.user?.role !== 'admin') {
-      results = data.map((item: any) => {
-        if (item.variant) {
-          const { cost_price_cents, ...variantRest } = item.variant;
-          return { ...item, variant: variantRest };
-        }
-        return item;
-      });
-    }
+     // Stripear cost_price si no es admin
+     let results = data;
+     if (req.user?.role !== 'admin') {
+       results = data.map((item: any) => {
+         if (item.variant) {
+           const { cost_price_cents, ...variantRest } = item.variant;
+           return { ...item, variant: variantRest };
+         }
+         return item;
+       });
+     }
 
-    res.json({ results, total: results.length });
-  });
+     res.json({ results, total: results.length });
+   });
+
+   // GET /api/inventory/search-advanced — search by multiple fields (model, color, storage, etc.)
+   router.get('/inventory/search-advanced', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
+     const { q, searchBy } = req.query;
+
+     if (!q || (q as string).trim().length === 0) {
+       return res.status(400).json({ error: 'Parámetro de búsqueda requerido (?q=)' });
+     }
+
+     const searchTerm = (q as string).trim();
+     let query = req.supabase!
+       .from('inventory_items')
+       .select(`
+         id, imei1, imei2, status, notes, created_at, updated_at,
+         variant:variant_id(
+           storage_gb, color, sale_price_cents, cost_price_cents,
+           product:product_id(model_name, brand:brand_id(name), image_url)
+         )
+       `);
+
+     // Aplicar filtros según el tipo de búsqueda
+     if (searchBy === 'model') {
+       query = query.ilike('variant.product.model_name', `%${searchTerm}%`);
+     } else if (searchBy === 'color') {
+       query = query.ilike('variant.color', `%${searchTerm}%`);
+     } else if (searchBy === 'storage') {
+       // Para almacenamiento, buscamos coincidencia exacta o parcial en GB
+       try {
+         const gbValue = parseInt(searchTerm, 10);
+         if (!isNaN(gbValue)) {
+           query = query.eq('variant.storage_gb', gbValue);
+         } else {
+           // Si no es un número válido, tratamos como texto
+           query = query.ilike('variant.storage_gb::text', `%${searchTerm}%`);
+         }
+       } catch {
+         query = query.ilike('variant.storage_gb::text', `%${searchTerm}%`);
+       }
+     } else if (searchBy === 'all') {
+       // Búsqueda en todos los campos relevantes
+       query = query.or(
+         `variant.product.model_name.ilike.%${searchTerm}%,` +
+         `variant.product.brand.name.ilike.%${searchTerm}%,` +
+         `variant.color.ilike.%${searchTerm}%,` +
+         `variant.storage_gb::text.ilike.%${searchTerm}%,` +
+         `imei1.ilike.%${searchTerm}%,` +
+         `imei2.ilike.%${searchTerm}%`
+       );
+     } else {
+       // Default: búsqueda por IMEI (comportamiento original)
+       query = query.or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`);
+     }
+
+     const { data, error } = await query
+       .order('created_at', { ascending: false })
+       .limit(20);
+
+     if (error) return res.status(500).json({ error: error.message });
+
+     // Stripear cost_price si no es admin
+     let results = data;
+     if (req.user?.role !== 'admin') {
+       results = data.map((item: any) => {
+         if (item.variant) {
+           const { cost_price_cents, ...variantRest } = item.variant;
+           return { ...item, variant: variantRest };
+         }
+         return item;
+       });
+     }
+
+     res.json({ results, total: results.length });
+   });
 
   // GET /api/inventory/:id/movements — stock movements for a specific inventory item
   router.get('/inventory/:id/movements', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
