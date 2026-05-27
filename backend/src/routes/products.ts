@@ -6,12 +6,33 @@ import { validateImeiPair } from '../lib/imei';
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
 
+/** Trigram similarity: cuántos tri-grupos de 3 chars comparten dos strings */
+function trigramSimilarity(a: string, b: string): number {
+  const trigrams = (s: string) => {
+    const set = new Set<string>();
+    const padded = `  ${s} `;
+    for (let i = 0; i < padded.length - 2; i++) {
+      set.add(padded.substring(i, i + 3));
+    }
+    return set;
+  };
+
+  const ta = trigrams(a);
+  const tb = trigrams(b);
+  let intersection = 0;
+  for (const tg of ta) {
+    if (tb.has(tg)) intersection++;
+  }
+  const union = ta.size + tb.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 export function createProductsRouter() {
   const router = Router();
 
   // GET /api/products — list products with brand info
   router.get('/', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
-    const { brand_id, search, page = '1', limit = '20' } = req.query;
+    const { brand_id, search, show_inactive, page = '1', limit = '20' } = req.query;
 
     let query = req.supabase!
       .from('products')
@@ -24,9 +45,50 @@ export function createProductsRouter() {
         )
       `, { count: 'exact' });
 
-    query = query.eq('is_active', true);
+    const isAdmin = req.user?.role === 'admin';
+    if (!(show_inactive === 'true' && isAdmin)) {
+      query = query.eq('is_active', true);
+    }
     if (brand_id) query = query.eq('brand_id', brand_id);
-    if (search) query = query.ilike('model_name', `%${search}%`);
+    if (search) {
+      const trimmed = (search as string).trim();
+      if (trimmed.length >= 2) {
+        const searchTerm = `%${trimmed}%`;
+
+        // Buscar brands que matcheen por ILIKE (parcial) o trigram similarity (typos)
+        const { data: matchedBrands } = await req.supabase!
+          .from('brands')
+          .select('id, name');
+
+        const brandIds = new Set<string>();
+        if (matchedBrands) {
+          // ILIKE: "infi" → "Infinix", "samsu" → "Samsung"
+          const ilikeMatches = matchedBrands.filter((b) =>
+            b.name.toLowerCase().includes(trimmed.toLowerCase()),
+          );
+          ilikeMatches.forEach((b) => brandIds.add(b.id));
+
+          // Trigram similarity: "inifinix" → "Infinix"
+          const fuzzyMatches = matchedBrands.filter((b) => {
+            if (brandIds.has(b.id)) return false; // ya matcheó por ILIKE
+            const sim = trigramSimilarity(b.name.toLowerCase(), trimmed.toLowerCase());
+            return sim > 0.3;
+          });
+          fuzzyMatches.forEach((b) => brandIds.add(b.id));
+        }
+
+        // Buscar en model_name, description, model_code, y brands
+        const conditions = [
+          `model_name.ilike.${searchTerm}`,
+          `description.ilike.${searchTerm}`,
+          `model_code.ilike.${searchTerm}`,
+        ];
+        if (brandIds.size > 0) {
+          conditions.push(`brand_id.in.(${Array.from(brandIds).join(',')})`);
+        }
+        query = query.or(conditions.join(','));
+      }
+    }
 
     const pageNum = parseInt(page as string, 10);
     const limitNum = Math.min(parseInt(limit as string, 10), 100);

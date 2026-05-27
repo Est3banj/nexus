@@ -47,6 +47,7 @@ export function ProductsPage() {
   const limit = 20;
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const abortRef = useRef<AbortController>();
 
   useEffect(() => {
     fetchProducts();
@@ -58,14 +59,35 @@ export function ProductsPage() {
 
   useEffect(() => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+
+    const trimmed = search.trim();
+    if (trimmed.length > 0 && trimmed.length < 2) return;
+
     searchTimerRef.current = setTimeout(() => {
       setPage(1);
       setSearchVersion((v) => v + 1);
     }, 300);
+
     return () => {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     };
   }, [search]);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      if (e.key === '/' && target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
+      }
+      if (e.key === 'Escape') {
+        setSearch('');
+        (document.activeElement as HTMLElement)?.blur();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   async function fetchBrands() {
     try {
@@ -79,18 +101,23 @@ export function ProductsPage() {
   }
 
   async function fetchProducts() {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       setLoading(true);
       setError('');
 
       const params = new URLSearchParams();
       if (selectedBrand) params.append('brand_id', selectedBrand);
-      if (search) params.append('search', search);
+      if (search.trim()) params.append('search', search.trim());
       params.append('page', String(page));
       params.append('limit', String(limit));
 
       const response = await fetch(`/api/products?${params}`, {
         headers: { Authorization: `Bearer ${session?.access_token}` },
+        signal: controller.signal,
       });
 
       if (!response.ok) throw new Error('Error al cargar productos');
@@ -99,6 +126,7 @@ export function ProductsPage() {
       setProducts(data.products);
       setTotal(data.total);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Error desconocido');
     } finally {
       setLoading(false);
@@ -186,9 +214,10 @@ export function ProductsPage() {
         <div className="flex-1 flex gap-2">
           <input
             type="text"
-            placeholder="Buscar por modelo..."
+            placeholder="Buscar por modelo... (presiona /)"
             value={search}
             onChange={(e) => handleSearchChange(e.target.value)}
+            autoFocus
             className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
           />
           <select
@@ -219,13 +248,19 @@ export function ProductsPage() {
       </div>
 
       {/* Grid de productos */}
-      {products.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          {search || selectedBrand
-            ? 'No se encontraron productos'
-            : 'No hay productos registrados'}
-        </div>
-      ) : (
+      <div className="relative">
+        {loading && products.length > 0 && (
+          <div className="absolute inset-0 bg-white/60 flex items-center justify-center z-10 rounded-lg">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+          </div>
+        )}
+        {products.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            {search || selectedBrand
+              ? 'No se encontraron productos'
+              : 'No hay productos registrados'}
+          </div>
+        ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {products.map((product) => {
@@ -367,8 +402,9 @@ export function ProductsPage() {
               </div>
             </div>
           )}
-        </>
-      )}
+          </>
+        )}
+      </div>
 
       {/* Delete confirmation modal */}
       {deleteTarget && (

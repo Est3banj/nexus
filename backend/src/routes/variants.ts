@@ -6,6 +6,26 @@ import { validateImeiPair } from '../lib/imei';
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
 
+/** Trigram similarity: cuántos tri-grupos de 3 chars comparten dos strings */
+function trigramSimilarity(a: string, b: string): number {
+  const trigrams = (s: string) => {
+    const set = new Set<string>();
+    const padded = `  ${s} `;
+    for (let i = 0; i < padded.length - 2; i++) {
+      set.add(padded.substring(i, i + 3));
+    }
+    return set;
+  };
+  const ta = trigrams(a);
+  const tb = trigrams(b);
+  let intersection = 0;
+  for (const tg of ta) {
+    if (tb.has(tg)) intersection++;
+  }
+  const union = ta.size + tb.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 export function createVariantsRouter() {
   const router = Router();
 
@@ -349,38 +369,100 @@ export function createVariantsRouter() {
          )
        `);
 
-     // Aplicar filtros según el tipo de búsqueda
-     if (searchBy === 'model') {
-       query = query.ilike('variant.product.model_name', `%${searchTerm}%`);
-     } else if (searchBy === 'color') {
-       query = query.ilike('variant.color', `%${searchTerm}%`);
-     } else if (searchBy === 'storage') {
-       // Para almacenamiento, buscamos coincidencia exacta o parcial en GB
-       try {
-         const gbValue = parseInt(searchTerm, 10);
-         if (!isNaN(gbValue)) {
-           query = query.eq('variant.storage_gb', gbValue);
-         } else {
-           // Si no es un número válido, tratamos como texto
-           query = query.ilike('variant.storage_gb::text', `%${searchTerm}%`);
-         }
-       } catch {
-         query = query.ilike('variant.storage_gb::text', `%${searchTerm}%`);
-       }
-     } else if (searchBy === 'all') {
-       // Búsqueda en todos los campos relevantes
-       query = query.or(
-         `variant.product.model_name.ilike.%${searchTerm}%,` +
-         `variant.product.brand.name.ilike.%${searchTerm}%,` +
-         `variant.color.ilike.%${searchTerm}%,` +
-         `variant.storage_gb::text.ilike.%${searchTerm}%,` +
-         `imei1.ilike.%${searchTerm}%,` +
-         `imei2.ilike.%${searchTerm}%`
-       );
-     } else {
-       // Default: búsqueda por IMEI (comportamiento original)
-       query = query.or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`);
-     }
+      // Helper: encuentra variant_ids que matchean por producto/marca/color
+      // (Evita dot notation profunda en .or() que PostgREST no soporta)
+      async function findVariantIdsByProduct(term: string): Promise<string[]> {
+        const lowerTerm = term.toLowerCase();
+        const ids = new Set<string>();
+
+        // 1. Buscar brands con ILIKE + trigram
+        const brandNames: string[] = [];
+        const { data: allBrands } = await req.supabase!.from('brands').select('id, name');
+        if (allBrands) {
+          for (const b of allBrands) {
+            const lowerName = b.name.toLowerCase();
+            if (lowerName.includes(lowerTerm)) {
+              brandNames.push(b.name);
+            } else if (trigramSimilarity(lowerName, lowerTerm) > 0.3) {
+              brandNames.push(b.name);
+            }
+          }
+        }
+
+        // 2. Buscar products por model_name (con o sin brand filter)
+        let productsQuery = req.supabase!.from('products').select('id');
+        if (brandNames.length > 0) {
+          const brandConds = brandNames.map((n) => `name.ilike.%${n}%`).join(',');
+          const { data: matchedBrands } = await req.supabase!
+            .from('brands')
+            .select('id')
+            .or(brandConds);
+          const brandIds = (matchedBrands || []).map((b) => b.id);
+          if (brandIds.length > 0) {
+            productsQuery = productsQuery.in('brand_id', brandIds);
+          }
+        }
+        productsQuery = productsQuery.or(
+          `model_name.ilike.%${term}%,description.ilike.%${term}%`,
+        );
+        const { data: matchedProducts } = await productsQuery;
+
+        if (matchedProducts && matchedProducts.length > 0) {
+          const productIds = matchedProducts.map((p) => p.id);
+          const { data: variants } = await req.supabase!
+            .from('product_variants')
+            .select('id')
+            .in('product_id', productIds)
+            .eq('is_active', true);
+          (variants || []).forEach((v) => ids.add(v.id));
+        }
+
+        // 3. Buscar variants por color (1 nivel: variant.color)
+        const { data: colorVariants } = await req.supabase!
+          .from('product_variants')
+          .select('id')
+          .ilike('color', `%${term}%`)
+          .eq('is_active', true);
+        (colorVariants || []).forEach((v) => ids.add(v.id));
+
+        // 4. Buscar variants por storage (numérico exacto)
+        const gbValue = parseInt(term, 10);
+        if (!isNaN(gbValue)) {
+          const { data: storageVariants } = await req.supabase!
+            .from('product_variants')
+            .select('id')
+            .eq('storage_gb', gbValue)
+            .eq('is_active', true);
+          (storageVariants || []).forEach((v) => ids.add(v.id));
+        }
+
+        return Array.from(ids);
+      }
+
+      // Aplicar filtros según el tipo de búsqueda
+      if (searchBy === 'all' || searchBy === 'model') {
+        const variantIds = await findVariantIdsByProduct(searchTerm);
+        const conditions = [
+          `imei1.ilike.%${searchTerm}%`,
+          `imei2.ilike.%${searchTerm}%`,
+        ];
+        if (variantIds.length > 0) {
+          conditions.push(`variant_id.in.(${variantIds.join(',')})`);
+        }
+        query = query.or(conditions.join(','));
+      } else if (searchBy === 'color') {
+        query = query.ilike('variant.color', `%${searchTerm}%`);
+      } else if (searchBy === 'storage') {
+        const gbValue = parseInt(searchTerm, 10);
+        if (!isNaN(gbValue)) {
+          query = query.eq('variant.storage_gb', gbValue);
+        } else {
+          query = query.ilike('variant.storage_gb::text', `%${searchTerm}%`);
+        }
+      } else {
+        // Default: búsqueda por IMEI (comportamiento original)
+        query = query.or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`);
+      }
 
      const { data, error } = await query
        .order('created_at', { ascending: false })

@@ -57,9 +57,11 @@ export function EmployeeSearchPage() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [total, setTotal] = useState(0);
-  const [searchBy, setSearchBy] = useState<SearchFilters['searchBy']>('imei');
+  const [searchBy, setSearchBy] = useState<SearchFilters['searchBy']>('all');
+  const [searchError, setSearchError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const abortRef = useRef<AbortController>();
 
   // Enfoque inicial en el input
   useEffect(() => {
@@ -69,6 +71,7 @@ export function EmployeeSearchPage() {
   // Búsqueda automática al cambiar query o searchBy
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
+    setSearchError(null);
 
     const trimmed = query.trim();
     if (trimmed.length === 0) {
@@ -91,42 +94,37 @@ export function EmployeeSearchPage() {
   }, [query, searchBy]);
 
   async function searchItems(term: string, searchBy: SearchFilters['searchBy']) {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       setLoading(true);
       setSearched(true);
       
       let endpoint = `/api/inventory/search?q=${encodeURIComponent(term)}`;
       
-      // Si no es búsqueda por IMEI, usamos un endpoint diferente o parámetros
       if (searchBy !== 'imei') {
         endpoint = `/api/inventory/search-advanced?q=${encodeURIComponent(term)}&searchBy=${searchBy}`;
       }
 
       const response = await fetch(endpoint, {
         headers: { Authorization: `Bearer ${session?.access_token}` },
+        signal: controller.signal,
       });
       
       if (!response.ok) {
-        // Si falla el endpoint avanzado, intentar con el básico como fallback
-        if (searchBy !== 'imei') {
-          const fallbackResponse = await fetch(`/api/inventory/search?q=${encodeURIComponent(term)}`, {
-            headers: { Authorization: `Bearer ${session?.access_token}` },
-          });
-          if (!fallbackResponse.ok) throw new Error('Error al buscar');
-          const data = await fallbackResponse.json();
-          setResults(data.results);
-          setTotal(data.total);
-          return;
-        } else {
-          throw new Error('Error al buscar');
-        }
+        const errorText = await response.text();
+        throw new Error(`Error al buscar: ${response.status} - ${errorText}`);
       }
       
       const data = await response.json();
       setResults(data.results);
       setTotal(data.total);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('Error searching:', err);
+      setSearchError(err instanceof Error ? err.message : 'Error al buscar');
       setResults([]);
     } finally {
       setLoading(false);
@@ -137,8 +135,10 @@ export function EmployeeSearchPage() {
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      // Forzar búsqueda actual
-      if (timerRef.current) clearTimeout(timerRef.current);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = undefined;
+      }
       searchItems(query.trim(), searchBy);
     }
   };
@@ -157,7 +157,7 @@ export function EmployeeSearchPage() {
               ref={inputRef}
               id="search-input"
               type="text"
-              inputMode="text"
+              inputMode={searchBy === 'imei' ? 'numeric' : 'text'}
               placeholder="Buscar por IMEI, modelo, color o capacidad..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -193,6 +193,13 @@ export function EmployeeSearchPage() {
           </p>
         </div>
       </div>
+
+      {/* Error State */}
+      {searchError && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-red-700">{searchError}</p>
+        </div>
+      )}
 
       {/* Loading State */}
       {loading && (
