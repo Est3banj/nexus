@@ -306,29 +306,29 @@ export function createVariantsRouter() {
          id, imei1, imei2, status, notes, created_at, updated_at,
          variant:variant_id(
            storage_gb, color, sale_price_cents, cost_price_cents,
-           product:product_id(model_name, brand:brand_id(name), image_url)
-         )
-       `)
-       .or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`)
-       .order('created_at', { ascending: false })
-       .limit(20);
+            product:product_id(model_name, brand:brand_id(name), main_image_url)
+          )
+        `)
+        .or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`)
+        .order('created_at', { ascending: false })
+        .limit(20);
 
-     if (error) return res.status(500).json({ error: error.message });
+      if (error) return res.status(500).json({ error: error.message });
 
-     // Stripear cost_price si no es admin
-     let results = data;
-     if (req.user?.role !== 'admin') {
-       results = data.map((item: any) => {
-         if (item.variant) {
-           const { cost_price_cents, ...variantRest } = item.variant;
-           return { ...item, variant: variantRest };
-         }
-         return item;
-       });
-     }
+      // Stripear cost_price si no es admin
+      let results = data;
+      if (req.user?.role !== 'admin') {
+        results = data.map((item: any) => {
+          if (item.variant) {
+            const { cost_price_cents, ...variantRest } = item.variant;
+            return { ...item, variant: variantRest };
+          }
+          return item;
+        });
+      }
 
-     res.json({ results, total: results.length });
-   });
+      res.json({ results, total: results.length });
+    });
 
    // GET /api/inventory/search-advanced — search by multiple fields (model, color, storage, etc.)
    router.get('/inventory/search-advanced', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
@@ -345,7 +345,7 @@ export function createVariantsRouter() {
          id, imei1, imei2, status, notes, created_at, updated_at,
          variant:variant_id(
            storage_gb, color, sale_price_cents, cost_price_cents,
-           product:product_id(model_name, brand:brand_id(name), image_url)
+           product:product_id(model_name, brand:brand_id(name), main_image_url)
          )
        `);
 

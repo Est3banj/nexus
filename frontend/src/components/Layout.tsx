@@ -11,16 +11,18 @@ const navItems = [
   { path: '/', label: 'Panel' },
   { path: '/admin/products', label: 'Catálogo' },
   { path: '/admin/products/new', label: 'Nuevo Artículo' },
+  { path: '/admin/brands', label: 'Marcas' },
   { path: '/admin/movements', label: 'Movimientos' },
-  { path: '/employee', label: 'Buscar IMEI' },
+  { path: '/admin/search', label: 'Buscar IMEI' },
 ];
 
 const navIcons: Record<string, string> = {
   '/': '⊞',
   '/admin/products': '≡',
   '/admin/products/new': '+',
+  '/admin/brands': '♢',
   '/admin/movements': '↻',
-  '/employee': '⌕',
+  '/admin/search': '⌕',
 };
 
 export function Layout({ children, title }: LayoutProps) {
@@ -30,7 +32,18 @@ export function Layout({ children, title }: LayoutProps) {
 
   const isActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
-    return location.pathname.startsWith(path);
+    // Catálogo: /admin/products o /admin/products/<id> pero NO /admin/products/new
+    if (path === '/admin/products') {
+      return location.pathname === path ||
+        (location.pathname.startsWith('/admin/products/') &&
+          !location.pathname.startsWith('/admin/products/new'));
+    }
+    // Nuevo Artículo: solo matchea exacto (no tiene sub-rutas hijas)
+    if (path === '/admin/products/new') {
+      return location.pathname === path;
+    }
+    // El resto: matchea exacto o prefijo (para posibles sub-rutas)
+    return location.pathname === path || location.pathname.startsWith(path + '/');
   };
 
   return (

@@ -306,7 +306,17 @@ export function createProductsRouter() {
                 .from('inventory_items')
                 .insert(records);
 
-              if (!insertError) {
+              if (insertError) {
+                console.error('Error inserting IMEIs:', insertError);
+                for (const item of uniqueItems) {
+                  imeiErrors.push({
+                    variant: `${v.storage_gb}GB ${v.color}`,
+                    imei1: item.imei1,
+                    imei2: item.imei2 || undefined,
+                    error: 'Error al guardar en base de datos',
+                  });
+                }
+              } else {
                 insertedCount = uniqueItems.length;
                 totalImeisInserted += insertedCount;
 

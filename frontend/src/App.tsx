@@ -7,6 +7,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ProductsPage } from './pages/admin/ProductsPage'; 
 import { ProductDetailPage } from './pages/admin/ProductDetailPage';
 import { AddArticlePage } from './pages/admin/AddArticlePage';
+import { BrandsPage } from './pages/admin/BrandsPage';
 import { StockIntakePage } from './pages/admin/StockIntakePage';
 import { StockMovementsPage } from './pages/admin/StockMovementsPage';
 import { EmployeeSearchPage } from './pages/employee/EmployeeSearchPage';
@@ -47,6 +48,13 @@ function App() {
               </Layout>
             </ProtectedRoute>
           } />
+          <Route path="/admin/brands" element={
+            <ProtectedRoute requiredRole="admin">
+              <Layout title="Marcas">
+                <BrandsPage />
+              </Layout>
+            </ProtectedRoute>
+          } />
           <Route path="/admin/stock-intake/:variantId" element={
             <ProtectedRoute requiredRole="admin">
               <Layout title="Agregar Stock">
@@ -58,6 +66,13 @@ function App() {
             <ProtectedRoute requiredRole="admin">
               <Layout title="Movimientos">
                 <StockMovementsPage />
+              </Layout>
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/search" element={
+            <ProtectedRoute requiredRole="admin">
+              <Layout title="Buscar IMEI">
+                <EmployeeSearchPage />
               </Layout>
             </ProtectedRoute>
           } />

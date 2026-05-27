@@ -22,6 +22,7 @@ interface Product {
   description: string | null;
   is_active: boolean;
   created_at: string;
+  main_image_url?: string | null;
   brand: Brand | null;
   variants: Variant[];
 }
@@ -238,10 +239,20 @@ export function ProductsPage() {
                   onClick={() => navigate(`/admin/products/${product.id}`)}
                   className="bg-white rounded-lg shadow hover:shadow-md transition-shadow cursor-pointer border border-gray-200 hover:border-blue-300 overflow-hidden"
                 >
-                  {/* Imagen placeholder */}
-                  <div className={`h-28 flex items-center justify-center ${colorClass}`}>
-                    <span className="text-4xl font-bold opacity-60">{initial}</span>
-                  </div>
+                  {/* Imagen del producto */}
+                  {product.main_image_url ? (
+                    <div className="h-28 flex items-center justify-center bg-white">
+                      <img
+                        src={product.main_image_url}
+                        alt={`${product.brand?.name} ${product.model_name}`}
+                        className="h-full w-full object-contain p-2"
+                      />
+                    </div>
+                  ) : (
+                    <div className={`h-28 flex items-center justify-center ${colorClass}`}>
+                      <span className="text-4xl font-bold opacity-60">{initial}</span>
+                    </div>
+                  )}
 
                   {/* Info */}
                   <div className="p-4">
