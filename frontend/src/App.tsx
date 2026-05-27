@@ -7,9 +7,10 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ProductsPage } from './pages/admin/ProductsPage'; 
 import { ProductDetailPage } from './pages/admin/ProductDetailPage';
 import { AddArticlePage } from './pages/admin/AddArticlePage';
+import { BrandsPage } from './pages/admin/BrandsPage';
 import { StockIntakePage } from './pages/admin/StockIntakePage';
 import { StockMovementsPage } from './pages/admin/StockMovementsPage';
-import { SearchImeiPage } from './pages/SearchImeiPage'; 
+import { EmployeeSearchPage } from './pages/employee/EmployeeSearchPage';
 
 function App() {
   return (
@@ -47,6 +48,13 @@ function App() {
               </Layout>
             </ProtectedRoute>
           } />
+          <Route path="/admin/brands" element={
+            <ProtectedRoute requiredRole="admin">
+              <Layout title="Marcas">
+                <BrandsPage />
+              </Layout>
+            </ProtectedRoute>
+          } />
           <Route path="/admin/stock-intake/:variantId" element={
             <ProtectedRoute requiredRole="admin">
               <Layout title="Agregar Stock">
@@ -61,13 +69,20 @@ function App() {
               </Layout>
             </ProtectedRoute>
           } />
-
-          {/* Employee route sin sidebar admin */}
-          <Route path="/employee" element={
-            <ProtectedRoute>
-              <SearchImeiPage />
+          <Route path="/admin/search" element={
+            <ProtectedRoute requiredRole="admin">
+              <Layout title="Buscar IMEI">
+                <EmployeeSearchPage />
+              </Layout>
             </ProtectedRoute>
           } />
+
+           {/* Employee route sin sidebar admin */}
+           <Route path="/employee" element={
+             <ProtectedRoute>
+               <EmployeeSearchPage />
+             </ProtectedRoute>
+           } />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

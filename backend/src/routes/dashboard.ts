@@ -14,50 +14,72 @@ export function createDashboardRouter() {
       // Queries paralelas para counts agregados
       const [
         { count: totalProducts },
-        { count: totalVariants },
-        { count: inStock },
+        { data: dashVariants },           // ahora traemos sale_price_cents para calcular valor
         { count: soldCount },
         { count: warrantyCount },
         { data: recentMovements },
-        { data: variants },
       ] = await Promise.all([
-        _req.supabase!.from('products').select('*', { count: 'exact', head: true }),
-        _req.supabase!.from('product_variants').select('*', { count: 'exact', head: true }).eq('is_active', true),
-        _req.supabase!.from('inventory_items').select('*', { count: 'exact', head: true }).eq('status', 'in_stock'),
+        _req.supabase!.from('products').select('*', { count: 'exact', head: true }).eq('is_active', true),
+        _req.supabase!.from('product_variants')
+          .select(`
+            id, product_id, storage_gb, color, sale_price_cents, low_stock_threshold,
+            product:product_id(id, model_name, brand:brand_id(name))
+          `)
+          .eq('is_active', true),
         _req.supabase!.from('inventory_items').select('*', { count: 'exact', head: true }).eq('status', 'sold'),
         _req.supabase!.from('inventory_items').select('*', { count: 'exact', head: true }).eq('status', 'warranty'),
         _req.supabase!.from('stock_movements')
-          .select('id, movement_type, quantity, reference_note, created_at')
-          .order('created_at', { ascending: false })
-          .limit(5),
-        _req.supabase!.from('product_variants')
           .select(`
-            id, storage_gb, color, low_stock_threshold,
-            product:product_id(model_name, brand:brand_id(name))
+            id, movement_type, quantity, reference_note, created_at,
+            variant:variant_id(
+              storage_gb, color,
+              product:product_id(model_name, brand:brand_id(name))
+            )
           `)
-          .eq('is_active', true),
+          .order('created_at', { ascending: false })
+          .limit(8),
       ]);
 
-      // Calcular stock bajo: variantes cuyo stock actual <= threshold
+      const cleanedMovements = (recentMovements ?? []).map((m: any) => ({
+        ...m,
+        variant: m.variant ?? null,
+      }));
+
+      // Stock counts + valor total + stock bajo — todo en un solo pase
+      let totalInStock = 0;
+      let totalStockValue = 0;
       const lowStockItems: any[] = [];
 
-      if (variants && variants.length > 0) {
-        // Obtener stock count para cada variante activa
-        const countsPromises = variants.map((v: any) =>
-          _req.supabase!.from('inventory_items')
-            .select('*', { count: 'exact', head: true })
-            .eq('variant_id', v.id)
-            .eq('status', 'in_stock'),
-        );
+      if (dashVariants && dashVariants.length > 0) {
+        const variantIds = dashVariants.map((v: any) => v.id);
 
-        const countsResults = await Promise.all(countsPromises);
+        const { data: stockCounts, error: countError } = await _req.supabase!
+          .from('inventory_items')
+          .select('variant_id')
+          .in('variant_id', variantIds)
+          .eq('status', 'in_stock');
 
-        for (let i = 0; i < variants.length; i++) {
-          const v = variants[i];
-          const stockCount = countsResults[i].count ?? 0;
+        if (countError) {
+          console.error('Error fetching stock counts:', countError);
+          throw countError;
+        }
+
+        const countMap = new Map<string, number>();
+        if (stockCounts) {
+          for (const item of stockCounts) {
+            countMap.set(item.variant_id, (countMap.get(item.variant_id) || 0) + 1);
+          }
+        }
+
+        for (const v of dashVariants) {
+          const stockCount = countMap.get(v.id) || 0;
+          totalInStock += stockCount;
+          totalStockValue += stockCount * (v.sale_price_cents || 0);
+
           if (stockCount <= v.low_stock_threshold) {
             lowStockItems.push({
               id: v.id,
+              product_id: v.product_id,
               storage_gb: v.storage_gb,
               color: v.color,
               low_stock_threshold: v.low_stock_threshold,
@@ -71,13 +93,15 @@ export function createDashboardRouter() {
       res.json({
         stats: {
           total_products: totalProducts ?? 0,
-          total_variants: totalVariants ?? 0,
-          in_stock: inStock ?? 0,
+          total_variants: dashVariants?.length ?? 0,
+          in_stock: totalInStock,
+          total_stock_value: totalStockValue,
           sold: soldCount ?? 0,
           warranty: warrantyCount ?? 0,
+          low_stock_count: lowStockItems.length,
         },
         low_stock: lowStockItems.sort((a: any, b: any) => a.stock_count - b.stock_count),
-        recent_movements: recentMovements ?? [],
+        recent_movements: cleanedMovements,
       });
     } catch (err) {
       console.error('Error fetching dashboard stats:', err);

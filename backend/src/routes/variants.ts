@@ -6,6 +6,26 @@ import { validateImeiPair } from '../lib/imei';
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
 
+/** Trigram similarity: cuántos tri-grupos de 3 chars comparten dos strings */
+function trigramSimilarity(a: string, b: string): number {
+  const trigrams = (s: string) => {
+    const set = new Set<string>();
+    const padded = `  ${s} `;
+    for (let i = 0; i < padded.length - 2; i++) {
+      set.add(padded.substring(i, i + 3));
+    }
+    return set;
+  };
+  const ta = trigrams(a);
+  const tb = trigrams(b);
+  let intersection = 0;
+  for (const tg of ta) {
+    if (tb.has(tg)) intersection++;
+  }
+  const union = ta.size + tb.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 export function createVariantsRouter() {
   const router = Router();
 
@@ -290,45 +310,180 @@ export function createVariantsRouter() {
     res.json({ inventory: updated });
   });
 
-  // GET /api/inventory/search — search IMEIs by partial match
-  router.get('/inventory/search', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
-    const { q } = req.query;
+   // GET /api/inventory/search — search IMEIs by partial match
+   router.get('/inventory/search', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
+     const { q } = req.query;
 
-    if (!q || (q as string).trim().length === 0) {
-      return res.status(400).json({ error: 'Parámetro de búsqueda requerido (?q=)' });
-    }
+     if (!q || (q as string).trim().length === 0) {
+       return res.status(400).json({ error: 'Parámetro de búsqueda requerido (?q=)' });
+     }
 
-    const searchTerm = (q as string).trim();
+     const searchTerm = (q as string).trim();
 
-    const { data, error } = await req.supabase!
-      .from('inventory_items')
-      .select(`
-        id, imei1, imei2, status, notes, created_at, updated_at,
-        variant:variant_id(
-          storage_gb, color, sale_price_cents, cost_price_cents,
-          product:product_id(model_name, brand:brand_id(name))
-        )
-      `)
-      .or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`)
-      .order('created_at', { ascending: false })
-      .limit(20);
+     const { data, error } = await req.supabase!
+       .from('inventory_items')
+       .select(`
+         id, imei1, imei2, status, notes, created_at, updated_at,
+         variant:variant_id(
+           storage_gb, color, sale_price_cents, cost_price_cents,
+            product:product_id(model_name, brand:brand_id(name), main_image_url)
+          )
+        `)
+        .or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`)
+        .order('created_at', { ascending: false })
+        .limit(20);
 
-    if (error) return res.status(500).json({ error: error.message });
+      if (error) return res.status(500).json({ error: error.message });
 
-    // Stripear cost_price si no es admin
-    let results = data;
-    if (req.user?.role !== 'admin') {
-      results = data.map((item: any) => {
-        if (item.variant) {
-          const { cost_price_cents, ...variantRest } = item.variant;
-          return { ...item, variant: variantRest };
+      // Stripear cost_price si no es admin
+      let results = data;
+      if (req.user?.role !== 'admin') {
+        results = data.map((item: any) => {
+          if (item.variant) {
+            const { cost_price_cents, ...variantRest } = item.variant;
+            return { ...item, variant: variantRest };
+          }
+          return item;
+        });
+      }
+
+      res.json({ results, total: results.length });
+    });
+
+   // GET /api/inventory/search-advanced — search by multiple fields (model, color, storage, etc.)
+   router.get('/inventory/search-advanced', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
+     const { q, searchBy } = req.query;
+
+     if (!q || (q as string).trim().length === 0) {
+       return res.status(400).json({ error: 'Parámetro de búsqueda requerido (?q=)' });
+     }
+
+     const searchTerm = (q as string).trim();
+     let query = req.supabase!
+       .from('inventory_items')
+       .select(`
+         id, imei1, imei2, status, notes, created_at, updated_at,
+         variant:variant_id(
+           storage_gb, color, sale_price_cents, cost_price_cents,
+           product:product_id(model_name, brand:brand_id(name), main_image_url)
+         )
+       `);
+
+      // Helper: encuentra variant_ids que matchean por producto/marca/color
+      // (Evita dot notation profunda en .or() que PostgREST no soporta)
+      async function findVariantIdsByProduct(term: string): Promise<string[]> {
+        const lowerTerm = term.toLowerCase();
+        const ids = new Set<string>();
+
+        // 1. Buscar brands con ILIKE + trigram
+        const brandNames: string[] = [];
+        const { data: allBrands } = await req.supabase!.from('brands').select('id, name');
+        if (allBrands) {
+          for (const b of allBrands) {
+            const lowerName = b.name.toLowerCase();
+            if (lowerName.includes(lowerTerm)) {
+              brandNames.push(b.name);
+            } else if (trigramSimilarity(lowerName, lowerTerm) > 0.3) {
+              brandNames.push(b.name);
+            }
+          }
         }
-        return item;
-      });
-    }
 
-    res.json({ results, total: results.length });
-  });
+        // 2. Buscar products por model_name (con o sin brand filter)
+        let productsQuery = req.supabase!.from('products').select('id');
+        if (brandNames.length > 0) {
+          const brandConds = brandNames.map((n) => `name.ilike.%${n}%`).join(',');
+          const { data: matchedBrands } = await req.supabase!
+            .from('brands')
+            .select('id')
+            .or(brandConds);
+          const brandIds = (matchedBrands || []).map((b) => b.id);
+          if (brandIds.length > 0) {
+            productsQuery = productsQuery.in('brand_id', brandIds);
+          }
+        }
+        productsQuery = productsQuery.or(
+          `model_name.ilike.%${term}%,description.ilike.%${term}%`,
+        );
+        const { data: matchedProducts } = await productsQuery;
+
+        if (matchedProducts && matchedProducts.length > 0) {
+          const productIds = matchedProducts.map((p) => p.id);
+          const { data: variants } = await req.supabase!
+            .from('product_variants')
+            .select('id')
+            .in('product_id', productIds)
+            .eq('is_active', true);
+          (variants || []).forEach((v) => ids.add(v.id));
+        }
+
+        // 3. Buscar variants por color (1 nivel: variant.color)
+        const { data: colorVariants } = await req.supabase!
+          .from('product_variants')
+          .select('id')
+          .ilike('color', `%${term}%`)
+          .eq('is_active', true);
+        (colorVariants || []).forEach((v) => ids.add(v.id));
+
+        // 4. Buscar variants por storage (numérico exacto)
+        const gbValue = parseInt(term, 10);
+        if (!isNaN(gbValue)) {
+          const { data: storageVariants } = await req.supabase!
+            .from('product_variants')
+            .select('id')
+            .eq('storage_gb', gbValue)
+            .eq('is_active', true);
+          (storageVariants || []).forEach((v) => ids.add(v.id));
+        }
+
+        return Array.from(ids);
+      }
+
+      // Aplicar filtros según el tipo de búsqueda
+      if (searchBy === 'all' || searchBy === 'model') {
+        const variantIds = await findVariantIdsByProduct(searchTerm);
+        const conditions = [
+          `imei1.ilike.%${searchTerm}%`,
+          `imei2.ilike.%${searchTerm}%`,
+        ];
+        if (variantIds.length > 0) {
+          conditions.push(`variant_id.in.(${variantIds.join(',')})`);
+        }
+        query = query.or(conditions.join(','));
+      } else if (searchBy === 'color') {
+        query = query.ilike('variant.color', `%${searchTerm}%`);
+      } else if (searchBy === 'storage') {
+        const gbValue = parseInt(searchTerm, 10);
+        if (!isNaN(gbValue)) {
+          query = query.eq('variant.storage_gb', gbValue);
+        } else {
+          query = query.ilike('variant.storage_gb::text', `%${searchTerm}%`);
+        }
+      } else {
+        // Default: búsqueda por IMEI (comportamiento original)
+        query = query.or(`imei1.ilike.%${searchTerm}%,imei2.ilike.%${searchTerm}%`);
+      }
+
+     const { data, error } = await query
+       .order('created_at', { ascending: false })
+       .limit(20);
+
+     if (error) return res.status(500).json({ error: error.message });
+
+     // Stripear cost_price si no es admin
+     let results = data;
+     if (req.user?.role !== 'admin') {
+       results = data.map((item: any) => {
+         if (item.variant) {
+           const { cost_price_cents, ...variantRest } = item.variant;
+           return { ...item, variant: variantRest };
+         }
+         return item;
+       });
+     }
+
+     res.json({ results, total: results.length });
+   });
 
   // GET /api/inventory/:id/movements — stock movements for a specific inventory item
   router.get('/inventory/:id/movements', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {

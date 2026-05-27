@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import { Session, User } from '@supabase/supabase-js';
 
@@ -21,12 +21,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<{ role: UserRole; full_name: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000;
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        fetchProfile(session.user.id);
+        await fetchProfile(session.user.id);
       }
       setLoading(false);
     });
@@ -43,6 +46,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+
+    const resetTimer = () => {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+      inactivityTimerRef.current = setTimeout(() => {
+        supabase.auth.signOut();
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    resetTimer();
+
+    const events = ['mousemove', 'keydown', 'click', 'touchstart', 'scroll', 'wheel'];
+    for (const event of events) {
+      document.addEventListener(event, resetTimer, { passive: true });
+    }
+
+    return () => {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+      for (const event of events) {
+        document.removeEventListener(event, resetTimer);
+      }
+    };
+  }, [session]);
 
   async function fetchProfile(userId: string) {
     const { data } = await supabase

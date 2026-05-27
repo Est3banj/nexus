@@ -6,12 +6,33 @@ import { validateImeiPair } from '../lib/imei';
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
 
+/** Trigram similarity: cuántos tri-grupos de 3 chars comparten dos strings */
+function trigramSimilarity(a: string, b: string): number {
+  const trigrams = (s: string) => {
+    const set = new Set<string>();
+    const padded = `  ${s} `;
+    for (let i = 0; i < padded.length - 2; i++) {
+      set.add(padded.substring(i, i + 3));
+    }
+    return set;
+  };
+
+  const ta = trigrams(a);
+  const tb = trigrams(b);
+  let intersection = 0;
+  for (const tg of ta) {
+    if (tb.has(tg)) intersection++;
+  }
+  const union = ta.size + tb.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 export function createProductsRouter() {
   const router = Router();
 
   // GET /api/products — list products with brand info
   router.get('/', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
-    const { brand_id, search, page = '1', limit = '20' } = req.query;
+    const { brand_id, search, show_inactive, page = '1', limit = '20' } = req.query;
 
     let query = req.supabase!
       .from('products')
@@ -24,9 +45,50 @@ export function createProductsRouter() {
         )
       `, { count: 'exact' });
 
-    query = query.eq('is_active', true);
+    const isAdmin = req.user?.role === 'admin';
+    if (!(show_inactive === 'true' && isAdmin)) {
+      query = query.eq('is_active', true);
+    }
     if (brand_id) query = query.eq('brand_id', brand_id);
-    if (search) query = query.ilike('model_name', `%${search}%`);
+    if (search) {
+      const trimmed = (search as string).trim();
+      if (trimmed.length >= 2) {
+        const searchTerm = `%${trimmed}%`;
+
+        // Buscar brands que matcheen por ILIKE (parcial) o trigram similarity (typos)
+        const { data: matchedBrands } = await req.supabase!
+          .from('brands')
+          .select('id, name');
+
+        const brandIds = new Set<string>();
+        if (matchedBrands) {
+          // ILIKE: "infi" → "Infinix", "samsu" → "Samsung"
+          const ilikeMatches = matchedBrands.filter((b) =>
+            b.name.toLowerCase().includes(trimmed.toLowerCase()),
+          );
+          ilikeMatches.forEach((b) => brandIds.add(b.id));
+
+          // Trigram similarity: "inifinix" → "Infinix"
+          const fuzzyMatches = matchedBrands.filter((b) => {
+            if (brandIds.has(b.id)) return false; // ya matcheó por ILIKE
+            const sim = trigramSimilarity(b.name.toLowerCase(), trimmed.toLowerCase());
+            return sim > 0.3;
+          });
+          fuzzyMatches.forEach((b) => brandIds.add(b.id));
+        }
+
+        // Buscar en model_name, description, model_code, y brands
+        const conditions = [
+          `model_name.ilike.${searchTerm}`,
+          `description.ilike.${searchTerm}`,
+          `model_code.ilike.${searchTerm}`,
+        ];
+        if (brandIds.size > 0) {
+          conditions.push(`brand_id.in.(${Array.from(brandIds).join(',')})`);
+        }
+        query = query.or(conditions.join(','));
+      }
+    }
 
     const pageNum = parseInt(page as string, 10);
     const limitNum = Math.min(parseInt(limit as string, 10), 100);
@@ -39,37 +101,39 @@ export function createProductsRouter() {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Transform: flatten stock_count and strip cost_price for employees
-    const products = data.map((p: any) => ({
-      ...p,
-      variants: p.variants?.map((v: any) => {
-        const stock_count = v.inventory_items?.[0]?.count ?? 0;
-        if (req.user?.role !== 'admin') {
-          const { cost_price_cents, ...rest } = v;
-          return { ...rest, stock_count, inventory_items: undefined };
-        }
-        return { ...v, stock_count, inventory_items: undefined };
-      }) ?? [],
-    }));
+     // Transform: flatten stock_count and strip cost_price for employees
+     const products = data.map((p: any) => ({
+       ...p,
+       main_image_url: p.main_image_url,
+       variants: p.variants?.map((v: any) => {
+         const stock_count = v.inventory_items?.[0]?.count ?? 0;
+         if (req.user?.role !== 'admin') {
+           const { cost_price_cents, ...rest } = v;
+           return { ...rest, stock_count, inventory_items: undefined };
+         }
+         return { ...v, stock_count, inventory_items: undefined };
+       }) ?? [],
+     }));
 
     res.json({ products, total: count, page: pageNum, limit: limitNum });
   });
 
-  // GET /api/products/:id — product detail with variants + stock count
-  router.get('/:id', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
-    const { data: product, error } = await req.supabase!
-      .from('products')
-      .select(`
-        *,
-        brand:brand_id(id, name, slug),
-        variants:product_variants(
-          id, storage_gb, color, sale_price_cents, cost_price_cents,
-          is_active, created_at,
-          inventory_items(count)
-        )
-      `)
-      .eq('id', req.params.id)
-      .single();
+   // GET /api/products/:id — product detail with variants + stock count
+   router.get('/:id', authenticate(supabaseUrl, supabaseAnonKey), async (req, res) => {
+     const { data: product, error } = await req.supabase!
+       .from('products')
+       .select(`
+         *,
+         brand:brand_id(id, name, slug),
+         variants:product_variants(
+           id, storage_gb, color, sale_price_cents, cost_price_cents,
+           is_active, created_at,
+           inventory_items(count)
+         ),
+         main_image_url
+       `)
+       .eq('id', req.params.id)
+       .single();
 
     if (error) return res.status(404).json({ error: 'Product not found' });
 
@@ -203,18 +267,18 @@ export function createProductsRouter() {
         finalBrandId = brand.id;
       }
 
-      // Paso 2: Crear producto
-      const { data: product, error: productError } = await req.supabase!
-        .from('products')
-        .insert({
-          brand_id: finalBrandId,
-          model_name: model_name.trim(),
-          description,
-          model_code: model_code?.trim() || null,
-          main_image_url: main_image_url || null,
-        })
-        .select('id, model_name, brand:brand_id(id, name)')
-        .single();
+       // Paso 2: Crear producto
+       const { data: product, error: productError } = await req.supabase!
+         .from('products')
+         .insert({
+           brand_id: finalBrandId,
+           model_name: model_name.trim(),
+           description,
+           model_code: model_code?.trim() || null,
+           main_image_url: main_image_url || null,
+         })
+         .select('id, model_name, model_code, description, main_image_url, is_active, created_at, brand:brand_id(id, name, slug)')
+         .single();
 
       if (productError) throw productError;
 
@@ -304,7 +368,17 @@ export function createProductsRouter() {
                 .from('inventory_items')
                 .insert(records);
 
-              if (!insertError) {
+              if (insertError) {
+                console.error('Error inserting IMEIs:', insertError);
+                for (const item of uniqueItems) {
+                  imeiErrors.push({
+                    variant: `${v.storage_gb}GB ${v.color}`,
+                    imei1: item.imei1,
+                    imei2: item.imei2 || undefined,
+                    error: 'Error al guardar en base de datos',
+                  });
+                }
+              } else {
                 insertedCount = uniqueItems.length;
                 totalImeisInserted += insertedCount;
 
